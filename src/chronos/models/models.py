@@ -106,8 +106,32 @@ class FocusSession(Base):
     duration_minutes = Column(Integer, nullable=True)
     focus_task = Column(String, nullable=True)
     blocked_apps = Column(Text, nullable=True)
+    blocked_urls = Column(Text, nullable=True)
     interruptions_count = Column(Integer, default=0)
+    focus_score = Column(Integer, nullable=True)
+    distractions_caught = Column(Integer, default=0)
+    app_switches = Column(JSON, nullable=True)
+    actual_duration = Column(Integer, nullable=True)
+    status = Column(String, default='active')
     created_at = Column(TIMESTAMP, default=datetime.now)
+
+    browser_activities = relationship("BrowserActivity", back_populates="focus_session")
+
+
+class BrowserActivity(Base):
+    __tablename__ = 'browser_activities'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    domain = Column(String, nullable=False)
+    url = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    duration = Column(Integer, default=0)
+    timestamp = Column(TIMESTAMP, default=datetime.now)
+    focus_session_id = Column(Integer, ForeignKey('focus_sessions.id'), nullable=True)
+
+    user = relationship("User")
+    focus_session = relationship("FocusSession", back_populates="browser_activities")
 
 
 class ProductivityGoal(Base):
