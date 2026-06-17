@@ -28,15 +28,18 @@ class AnalyticsEngine:
     def __init__(self, db_session: Session):
         self.db = db_session
 
-    def get_daily_stats(self, user_id, date=None):
+    def get_daily_stats(self, user_id, date=None, force=False):
         if not date:
             date = datetime.now().date()
 
-        cached = self.db.query(DailyStat).filter_by(
-            user_id=user_id, date=date
-        ).first()
-        if cached:
-            return cached
+        # Delete stale cache so stats are always recomputed from live data
+        if force:
+            existing = self.db.query(DailyStat).filter_by(
+                user_id=user_id, date=date
+            ).first()
+            if existing:
+                self.db.delete(existing)
+                self.db.commit()
 
         sessions = self.db.query(AppSession).filter(
             func.date(AppSession.start_time) == date
@@ -44,7 +47,7 @@ class AnalyticsEngine:
 
         total_screen_time = sum(s.duration_seconds or 0 for s in sessions)
 
-        focus_apps = ['VSCode', 'PyCharm', 'Sublime', 'IntelliJ']
+        focus_apps = ['VSCode', 'Visual Studio Code', 'Code', 'Cursor', 'PyCharm', 'Sublime', 'IntelliJ', 'WebStorm', 'GoLand']
         focus_time = sum(
             s.duration_seconds for s in sessions
             if s.app and any(app in (s.app.display_name or '') for app in focus_apps)
@@ -60,18 +63,28 @@ class AnalyticsEngine:
             total_screen_time, focus_time, tasks_completed, sessions
         )
 
-        stat = DailyStat(
-            user_id=user_id,
-            date=date,
-            total_screen_time_seconds=int(total_screen_time),
-            focus_time_seconds=int(focus_time),
-            tasks_completed=tasks_completed,
-            productivity_score=score
-        )
-        self.db.add(stat)
+        # Upsert: replace existing stat for this date/user
+        existing = self.db.query(DailyStat).filter_by(
+            user_id=user_id, date=date
+        ).first()
+        if existing:
+            existing.total_screen_time_seconds = int(total_screen_time)
+            existing.focus_time_seconds = int(focus_time)
+            existing.tasks_completed = tasks_completed
+            existing.productivity_score = score
+        else:
+            stat = DailyStat(
+                user_id=user_id,
+                date=date,
+                total_screen_time_seconds=int(total_screen_time),
+                focus_time_seconds=int(focus_time),
+                tasks_completed=tasks_completed,
+                productivity_score=score
+            )
+            self.db.add(stat)
         self.db.commit()
 
-        return stat
+        return self.db.query(DailyStat).filter_by(user_id=user_id, date=date).first()
 
     def _calculate_productivity_score(self, screen_time, focus_time, tasks, sessions):
         focus_ratio = focus_time / screen_time if screen_time > 0 else 0
@@ -88,10 +101,15 @@ class AnalyticsEngine:
             (daily_balance * 0.1)
         ) * 100
 
-        return min(100, max(0, score))
+        return round(min(100, max(0, score)))
 
     def get_weekly_report(self, user_id):
         week_start = datetime.now() - timedelta(days=7)
+
+        # Ensure all days in range have stats computed
+        for i in range(8):
+            day = week_start.date() + timedelta(days=i)
+            self.get_daily_stats(user_id, day)
 
         daily_stats = self.db.query(DailyStat).filter(
             DailyStat.user_id == user_id,
@@ -115,6 +133,42 @@ class AnalyticsEngine:
             'avg_daily_score': sum(s.productivity_score for s in daily_stats) / len(daily_stats),
             'best_day': max(daily_stats, key=lambda x: x.productivity_score).date.isoformat() if daily_stats else None,
             'worst_day': min(daily_stats, key=lambda x: x.productivity_score).date.isoformat() if daily_stats else None,
+        }
+
+    def get_monthly_report(self, user_id):
+        month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        today = datetime.now().date()
+
+        # Ensure all days this month have stats computed
+        day = month_start.date()
+        while day <= today:
+            self.get_daily_stats(user_id, day)
+            day += timedelta(days=1)
+
+        daily_stats = self.db.query(DailyStat).filter(
+            DailyStat.user_id == user_id,
+            DailyStat.date >= month_start.date()
+        ).all()
+
+        if not daily_stats:
+            return {
+                'total_screen_time': 0,
+                'focus_time': 0,
+                'tasks_completed': 0,
+                'avg_daily_score': 0,
+                'best_day': None,
+                'worst_day': None,
+                'days_tracked': 0,
+            }
+
+        return {
+            'total_screen_time': sum(s.total_screen_time_seconds for s in daily_stats),
+            'focus_time': sum(s.focus_time_seconds for s in daily_stats),
+            'tasks_completed': sum(s.tasks_completed for s in daily_stats),
+            'avg_daily_score': sum(s.productivity_score for s in daily_stats) / len(daily_stats),
+            'best_day': max(daily_stats, key=lambda x: x.productivity_score).date.isoformat() if daily_stats else None,
+            'worst_day': min(daily_stats, key=lambda x: x.productivity_score).date.isoformat() if daily_stats else None,
+            'days_tracked': len(daily_stats),
         }
 
     def get_app_breakdown(self, user_id, date=None):

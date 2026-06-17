@@ -198,9 +198,12 @@ def create_app(db_session: Session = None):
         focus_session.distractions_caught = distractions
 
         actual_minutes = actual_duration_seconds / 60
-        time_ratio = actual_minutes / planned_minutes if planned_minutes > 0 else 1
-        score = (time_ratio * 100) - (interruptions * 5) - (distractions * 3)
-        score = max(0, min(100, int(score)))
+        time_ratio = min(1.0, actual_minutes / planned_minutes) if planned_minutes > 0 else 1
+        base_score = int(time_ratio * 100)
+        # Ensure minimum base of 50 if no distractions or interruptions
+        if interruptions == 0 and distractions == 0:
+            base_score = max(base_score, 50)
+        score = max(0, min(100, base_score - (interruptions * 5) - (distractions * 3)))
         focus_session.focus_score = score
 
         db_session.commit()
@@ -257,19 +260,33 @@ def create_app(db_session: Session = None):
         ).first()
         focus_session_id = active_focus.id if active_focus else None
 
-        activity = BrowserActivity(
-            user_id=user.id,
-            domain=domain,
-            url=url,
-            title=title,
-            duration=5,
-            timestamp=timestamp,
-            focus_session_id=focus_session_id
-        )
-        db_session.add(activity)
-        db_session.commit()
+        # Look for an existing record for the same domain within the last 10 seconds
+        recent = db_session.query(BrowserActivity).filter(
+            BrowserActivity.user_id == user.id,
+            BrowserActivity.domain == domain,
+            BrowserActivity.url == url,
+            BrowserActivity.timestamp >= timestamp - timedelta(seconds=10)
+        ).order_by(BrowserActivity.timestamp.desc()).first()
 
-        return jsonify({'id': activity.id, 'message': 'Activity recorded'}), 201
+        if recent:
+            recent.duration = (recent.duration or 0) + 5
+            recent.timestamp = timestamp
+            recent.focus_session_id = focus_session_id or recent.focus_session_id
+            db_session.commit()
+            return jsonify({'id': recent.id, 'message': 'Activity updated'}), 200
+        else:
+            activity = BrowserActivity(
+                user_id=user.id,
+                domain=domain,
+                url=url,
+                title=title,
+                duration=5,
+                timestamp=timestamp,
+                focus_session_id=focus_session_id
+            )
+            db_session.add(activity)
+            db_session.commit()
+            return jsonify({'id': activity.id, 'message': 'Activity recorded'}), 201
 
     return app
 

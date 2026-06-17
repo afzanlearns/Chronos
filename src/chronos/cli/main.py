@@ -55,7 +55,8 @@ def report():
 
 @report.command()
 @click.option('--date', type=str, default='today', help='Date: today, week, or YYYY-MM-DD')
-def daily(date):
+@click.option('--recompute', is_flag=True, default=False, help='Force recompute stats from live data')
+def daily(date, recompute):
     """Show daily productivity report with website breakdown"""
     session = get_session()
     user = ensure_default_user(session)
@@ -72,7 +73,7 @@ def daily(date):
             console.print("[red]Invalid date format. Use YYYY-MM-DD or 'today'[/red]")
             return
 
-    stats = analytics.get_daily_stats(user.id, report_date)
+    stats = analytics.get_daily_stats(user.id, report_date, force=recompute)
     breakdown = analytics.get_app_breakdown(user.id, report_date)
     browser_report = analytics.get_daily_report_with_browser_data(user.id, report_date)
 
@@ -149,6 +150,35 @@ def weekly():
         f"[bold]Worst Day:[/bold] {wd}"
     )
     console.print(Panel(content, title="Weekly Report"))
+    session.close()
+
+
+@report.command()
+def monthly():
+    """Show monthly productivity report"""
+    session = get_session()
+    user = ensure_default_user(session)
+    analytics = AnalyticsEngine(session)
+    report_data = analytics.get_monthly_report(user.id)
+
+    st = int(report_data['total_screen_time'] / 60) if report_data['total_screen_time'] else 0
+    ft = int(report_data['focus_time'] / 60) if report_data['focus_time'] else 0
+    tc = report_data['tasks_completed']
+    sc = report_data['avg_daily_score']
+    dt = report_data['days_tracked']
+    bd = report_data['best_day'] or 'N/A'
+    wd = report_data['worst_day'] or 'N/A'
+
+    content = (
+        f"[bold]Total Screen Time:[/bold] {st}m\n"
+        f"[bold]Focus Time:[/bold] {ft}m\n"
+        f"[bold]Tasks Completed:[/bold] {tc}\n"
+        f"[bold]Days Tracked:[/bold] {dt}\n"
+        f"[bold]Avg Daily Score:[/bold] {sc:.1f}/100\n"
+        f"[bold]Best Day:[/bold] {bd}\n"
+        f"[bold]Worst Day:[/bold] {wd}"
+    )
+    console.print(Panel(content, title="Monthly Report"))
     session.close()
 
 
@@ -418,9 +448,12 @@ def stop_focus(session_id):
     focus_session.distractions_caught = distractions
 
     actual_minutes = actual_duration_seconds / 60
-    time_ratio = actual_minutes / planned_minutes if planned_minutes > 0 else 1
-    score = (time_ratio * 100) - (interruptions * 5) - (distractions * 3)
-    score = max(0, min(100, int(score)))
+    time_ratio = min(1.0, actual_minutes / planned_minutes) if planned_minutes > 0 else 1
+    base_score = int(time_ratio * 100)
+    # Ensure minimum base of 50 if no distractions or interruptions
+    if interruptions == 0 and distractions == 0:
+        base_score = max(base_score, 50)
+    score = max(0, min(100, base_score - (interruptions * 5) - (distractions * 3)))
     focus_session.focus_score = score
 
     session.commit()
