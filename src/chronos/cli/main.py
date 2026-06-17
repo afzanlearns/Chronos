@@ -20,10 +20,21 @@ from chronos.config import settings
 console = Console()
 
 
-@click.group()
-def cli():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
     """Chronos — Track app usage and tasks"""
-    pass
+    if ctx.invoked_subcommand is None:
+        guide = Text()
+        guide.append("\n")
+        guide.append("Terminal 1 — API:\n", style="bold bright_blue")
+        guide.append("  chronos serve\n\n", style="bright_blue")
+        guide.append("Terminal 2 — WindowTracker (app tracking):\n", style="bold bright_blue")
+        guide.append('  python -c "from chronos.monitoring.window_tracker import WindowTracker; from chronos.db import get_session; t = WindowTracker(get_session()); t.start_tracking(); input(\'WindowTracker running. Press Enter to stop...\')"\n\n', style="bright_blue")
+        guide.append("Terminal 3 — Electron app (optional):\n", style="bold bright_blue")
+        guide.append("  cd frontend\n  npm start\n", style="bright_blue")
+        console.print(Panel(guide, title="Get Started with Chronos", border_style="bright_blue"))
+        click.echo(cli.get_help(ctx))
 
 
 @cli.command()
