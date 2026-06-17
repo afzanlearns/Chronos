@@ -1,11 +1,12 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from chronos.db import get_session, ensure_default_user
-from chronos.models.models import Task, ProductivityGoal
+from chronos.models.models import Task, ProductivityGoal, FocusSession, BrowserActivity, AppSession, App
 from chronos.analytics.analytics import AnalyticsEngine
 from chronos.tasks.task_manager import TaskManager
 from chronos.notifications.notifier import NotificationService
@@ -119,4 +120,165 @@ def create_app(db_session: Session = None):
         db_session.commit()
         return jsonify({'id': goal.id}), 201
 
+    @app.route('/api/focus/start', methods=['POST'])
+    def start_focus():
+        data = request.json
+        task_name = data.get('task_name', '')
+        planned_duration = data.get('planned_duration', 25)
+        blocked_apps = data.get('blocked_apps', '')
+        blocked_urls = data.get('blocked_urls', '')
+
+        focus_session = FocusSession(
+            start_time=datetime.now(),
+            duration_minutes=planned_duration,
+            focus_task=task_name,
+            blocked_apps=blocked_apps,
+            blocked_urls=blocked_urls,
+            status='active'
+        )
+        db_session.add(focus_session)
+        db_session.commit()
+
+        return jsonify({
+            'session_id': focus_session.id,
+            'message': 'Focus session started'
+        }), 201
+
+    @app.route('/api/focus/stop/<int:session_id>', methods=['POST'])
+    def stop_focus(session_id):
+        focus_session = db_session.query(FocusSession).filter_by(id=session_id).first()
+        if not focus_session:
+            return jsonify({'error': 'Focus session not found'}), 404
+
+        now = datetime.now()
+        focus_session.end_time = now
+        focus_session.status = 'completed'
+
+        actual_duration_seconds = int((now - focus_session.start_time).total_seconds())
+        focus_session.actual_duration = actual_duration_seconds
+
+        planned_minutes = focus_session.duration_minutes or 1
+
+        if focus_session.start_time:
+            app_sessions = db_session.query(AppSession).filter(
+                AppSession.start_time >= focus_session.start_time,
+                AppSession.start_time <= now
+            ).all()
+
+            app_names = []
+            seen_apps = set()
+            for s in app_sessions:
+                if s.app_id and s.app_id not in seen_apps:
+                    seen_apps.add(s.app_id)
+                    if s.app and s.app.display_name:
+                        app_names.append(s.app.display_name)
+
+            interruptions = max(0, len(seen_apps) - 1)
+            focus_session.interruptions_count = interruptions
+            focus_session.app_switches = list(seen_apps) if seen_apps else []
+
+        blocked_urls_list = []
+        if focus_session.blocked_urls:
+            blocked_urls_list = [u.strip() for u in focus_session.blocked_urls.split(',') if u.strip()]
+
+        distractions = 0
+        urls_hit = []
+        if blocked_urls_list:
+            browser_activities = db_session.query(BrowserActivity).filter(
+                BrowserActivity.focus_session_id == session_id
+            ).all()
+            blocked_domains = set()
+            for ba in browser_activities:
+                for blocked in blocked_urls_list:
+                    if blocked in ba.domain:
+                        blocked_domains.add(ba.domain)
+            distractions = len(blocked_domains)
+            urls_hit = list(blocked_domains)
+
+        focus_session.distractions_caught = distractions
+
+        actual_minutes = actual_duration_seconds / 60
+        time_ratio = actual_minutes / planned_minutes if planned_minutes > 0 else 1
+        score = (time_ratio * 100) - (interruptions * 5) - (distractions * 3)
+        score = max(0, min(100, int(score)))
+        focus_session.focus_score = score
+
+        db_session.commit()
+
+        browser_data = db_session.query(BrowserActivity).filter(
+            BrowserActivity.focus_session_id == session_id
+        ).all()
+
+        domain_stats = {}
+        for bd in browser_data:
+            if bd.domain not in domain_stats:
+                domain_stats[bd.domain] = {'duration': 0, 'visits': 0}
+            domain_stats[bd.domain]['duration'] += bd.duration or 0
+            domain_stats[bd.domain]['visits'] += 1
+
+        browser_activity = []
+        for domain, stats in sorted(domain_stats.items(), key=lambda x: x[1]['duration'], reverse=True):
+            d = stats['duration']
+            browser_activity.append({
+                'domain': domain,
+                'duration_seconds': d,
+                'duration_formatted': format_duration(d),
+                'visits': stats['visits']
+            })
+
+        return jsonify({
+            'message': 'Focus session ended',
+            'analytics': {
+                'task_name': focus_session.focus_task or '',
+                'planned_duration': focus_session.duration_minutes or 0,
+                'actual_duration_seconds': actual_duration_seconds,
+                'actual_duration_formatted': format_duration(actual_duration_seconds),
+                'focus_score': score,
+                'interruptions': interruptions,
+                'interruption_apps': list(seen_apps) if app_sessions else [],
+                'distractions_caught': distractions,
+                'blocked_urls_hit': urls_hit,
+                'browser_activity': browser_activity
+            }
+        })
+
+    @app.route('/api/browser/activity', methods=['POST'])
+    def create_browser_activity():
+        data = request.json
+        url = data.get('url', '')
+        title = data.get('title', '')
+        domain = data.get('domain', '')
+        timestamp_str = data.get('timestamp')
+
+        timestamp = datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now()
+
+        active_focus = db_session.query(FocusSession).filter(
+            FocusSession.status == 'active'
+        ).first()
+        focus_session_id = active_focus.id if active_focus else None
+
+        activity = BrowserActivity(
+            user_id=user.id,
+            domain=domain,
+            url=url,
+            title=title,
+            duration=5,
+            timestamp=timestamp,
+            focus_session_id=focus_session_id
+        )
+        db_session.add(activity)
+        db_session.commit()
+
+        return jsonify({'id': activity.id, 'message': 'Activity recorded'}), 201
+
     return app
+
+
+def format_duration(seconds):
+    minutes = seconds // 60
+    secs = seconds % 60
+    if minutes >= 60:
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours}h {mins}m"
+    return f"{minutes}m {secs}s"
