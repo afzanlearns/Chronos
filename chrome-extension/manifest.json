@@ -2,12 +2,25 @@
   "manifest_version": 3,
   "name": "Chronos Tab Tracker",
   "version": "1.0",
-  "description": "Track browser tabs for Chronos productivity monitoring",
-  "permissions": ["activeTab", "tabs", "nativeMessaging"],
+  "description": "Track browser tabs and block distracting sites during focus sessions",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "nativeMessaging",
+    "webRequest",
+    "storage",
+    "alarms"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "host_permissions": [
     "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["blocked.html", "blocked.js"],
+      "matches": ["<all_urls>"]
+    }
   ]
 }
