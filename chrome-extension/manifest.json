@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Chronos Tab Tracker",
+  "version": "1.0",
+  "description": "Track browser tabs for Chronos productivity monitoring",
+  "permissions": ["activeTab", "tabs", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
