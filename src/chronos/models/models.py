@@ -128,6 +128,7 @@ class BrowserActivity(Base):
     title = Column(String, nullable=True)
     duration = Column(Integer, default=0)
     timestamp = Column(TIMESTAMP, default=datetime.now)
+    created_at = Column(TIMESTAMP, default=datetime.now)
     focus_session_id = Column(Integer, ForeignKey('focus_sessions.id'), nullable=True)
 
     user = relationship("User")

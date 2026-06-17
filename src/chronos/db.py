@@ -21,6 +21,13 @@ def init_db(engine=None):
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+
+    # Migration: add created_at to browser_activities if missing
+    try:
+        engine.execute("ALTER TABLE browser_activities ADD COLUMN created_at TIMESTAMP")
+    except Exception:
+        pass
+
     return engine
 
 

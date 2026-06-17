@@ -282,6 +282,7 @@ def create_app(db_session: Session = None):
                 title=title,
                 duration=5,
                 timestamp=timestamp,
+                created_at=timestamp,
                 focus_session_id=focus_session_id
             )
             db_session.add(activity)

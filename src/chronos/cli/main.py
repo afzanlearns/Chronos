@@ -643,6 +643,73 @@ def interruptions(analyze):
 
 
 @cli.command()
+@click.option('--domain', type=str, default=None, help='Filter by domain (e.g. github.com)')
+@click.option('--date', type=str, default='today', help='Date: today, YYYY-MM-DD, or all')
+def browsing(domain, date):
+    """Show browsing history with visit timestamps"""
+    from chronos.models.models import BrowserActivity
+
+    session = get_session()
+    user = ensure_default_user(session)
+
+    query = session.query(BrowserActivity).filter(BrowserActivity.user_id == user.id)
+
+    if date == 'today':
+        day = datetime.now().date()
+        query = query.filter(
+            BrowserActivity.created_at >= datetime.combine(day, datetime.min.time()),
+            BrowserActivity.created_at <= datetime.combine(day, datetime.max.time())
+        )
+    elif date != 'all':
+        try:
+            day = datetime.strptime(date, '%Y-%m-%d').date()
+            query = query.filter(
+                BrowserActivity.created_at >= datetime.combine(day, datetime.min.time()),
+                BrowserActivity.created_at <= datetime.combine(day, datetime.max.time())
+            )
+        except ValueError:
+            console.print("[red]Invalid date format. Use YYYY-MM-DD, 'today', or 'all'[/red]")
+            session.close()
+            return
+
+    if domain:
+        query = query.filter(BrowserActivity.domain.ilike(f'%{domain}%'))
+
+    activities = query.order_by(BrowserActivity.created_at.desc()).all()
+
+    if not activities:
+        console.print("[yellow]No browsing activity found.[/yellow]")
+        session.close()
+        return
+
+    table = Table(title=f"Browsing History{' - ' + domain if domain else ''}")
+    table.add_column("Domain", style="cyan", no_wrap=True)
+    table.add_column("Page", style="white", max_width=40)
+    table.add_column("Visited At", style="green")
+    table.add_column("Last Seen", style="yellow")
+    table.add_column("Duration", style="magenta")
+
+    for a in activities:
+        started = a.created_at.strftime('%H:%M:%S') if a.created_at else '?'
+        last_seen = a.timestamp.strftime('%H:%M:%S') if a.timestamp else '?'
+        duration_str = format_duration(a.duration or 0)
+        page = a.title or a.url or '-'
+        if len(page) > 40:
+            page = page[:37] + '...'
+
+        table.add_row(
+            a.domain,
+            page,
+            started,
+            last_seen,
+            duration_str
+        )
+
+    console.print(table)
+    session.close()
+
+
+@cli.command()
 @click.option('--port', type=int, default=None, help='Port for the API server')
 def serve(port):
     """Start the Chronos API server"""
