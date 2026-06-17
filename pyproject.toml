@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronos"
+version = "1.0.0"
+description = "Chronos - App usage tracker and task manager"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0",
+    "flask-cors>=4.0",
+    "sqlalchemy>=2.0",
+    "pygetwindow>=0.0.9",
+    "plyer>=2.1",
+    "apscheduler>=3.10",
+    "python-dotenv>=1.0",
+    "click>=8.1",
+    "rich>=13.0",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+chronos = "chronos.cli.main:cli"
